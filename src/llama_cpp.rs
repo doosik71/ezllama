@@ -1,41 +1,90 @@
+use std::fs;
 use std::io::{self, Write};
 use std::process::Command;
 
-pub fn check() {
-    match llama_cpp_versions() {
-        Some((cli_version, server_version)) => {
+pub struct CheckOptions {
+    pub verbose: bool,
+    pub interactive: bool,
+}
+
+pub enum ClientInput {
+    Prompt(String),
+    File(String),
+}
+
+pub fn check(options: CheckOptions) -> io::Result<()> {
+    if let Some((cli_version, server_version, completion_version)) = llama_cpp_versions() {
+        if options.verbose {
             println!("llama.cpp is installed.");
             println!("llama-cli version: {cli_version}");
             println!("llama-server version: {server_version}");
+            println!("llama-completion version: {completion_version}");
         }
-        None => {
-            println!("llama-cli and llama-server are not both installed.");
+        return Ok(());
+    }
 
-            let install_plan = install_plan();
-            println!("Installation command:");
-            println!("{}", install_plan.message);
+    if options.verbose {
+        println!("llama-cli, llama-server, and llama-completion are not all installed.");
+    }
 
-            if let Some(command) = install_plan.command {
-                if ask_yes_no("Install llama.cpp? [y/N]: ") {
-                    match run_install_command(command) {
-                        Ok(()) => println!("Installation command executed."),
-                        Err(error) => eprintln!("Installation command failed: {error}"),
-                    }
-                } else {
-                    println!("Skipping installation.");
-                }
-            } else {
-                println!("No automatic install command could be determined. Please check the installation command for your distribution.");
+    let install_plan = install_plan();
+    if options.verbose {
+        println!("Installation command:");
+        println!("{}", install_plan.message);
+    }
+
+    let Some(command) = install_plan.command else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "No automatic install command could be determined. Please check the llama.cpp install command for your distribution.",
+        ));
+    };
+
+    if !options.interactive {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "llama-cli, llama-server, and llama-completion are not installed.",
+        ));
+    }
+
+    if !ask_yes_no("Install llama.cpp? [y/N]: ") {
+        if options.verbose {
+            println!("Skipping installation.");
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "llama-cli, llama-server, and llama-completion are not installed.",
+        ));
+    }
+
+    run_install_command(command)?;
+    if options.verbose {
+        println!("Installation command executed.");
+    }
+
+    match llama_cpp_versions() {
+        Some((cli_version, server_version, completion_version)) => {
+            if options.verbose {
+                println!("llama.cpp installation verified.");
+                println!("llama-cli version: {cli_version}");
+                println!("llama-server version: {server_version}");
+                println!("llama-completion version: {completion_version}");
             }
+            Ok(())
         }
+        None => Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "llama.cpp installation completed, but llama-cli, llama-server, and llama-completion are still not available.",
+        )),
     }
 }
 
-fn llama_cpp_versions() -> Option<(String, String)> {
+fn llama_cpp_versions() -> Option<(String, String, String)> {
     let cli_version = command_version("llama-cli")?;
     let server_version = command_version("llama-server")?;
+    let completion_version = command_version("llama-completion")?;
 
-    Some((cli_version, server_version))
+    Some((cli_version, server_version, completion_version))
 }
 
 fn command_version(command: &str) -> Option<String> {
@@ -47,7 +96,11 @@ fn command_version(command: &str) -> Option<String> {
 }
 
 fn extract_version(output: &str) -> Option<String> {
-    for line in output.lines().map(str::trim).filter(|line| !line.is_empty()) {
+    for line in output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
         if let Some(version) = extract_version_from_line(line) {
             return Some(version);
         }
@@ -120,7 +173,8 @@ fn install_plan() -> InstallPlan {
             cmake --build build -j && \
             mkdir -p ~/.local/bin && \
             ln -sf \"$(pwd)/build/bin/llama-cli\" ~/.local/bin/llama-cli && \
-            ln -sf \"$(pwd)/build/bin/llama-server\" ~/.local/bin/llama-server";
+            ln -sf \"$(pwd)/build/bin/llama-server\" ~/.local/bin/llama-server && \
+            ln -sf \"$(pwd)/build/bin/llama-completion\" ~/.local/bin/llama-completion";
 
     InstallPlan {
         message: cmd,
@@ -139,7 +193,10 @@ fn ask_yes_no(prompt: &str) -> bool {
         return false;
     }
 
-    matches!(input.trim().to_lowercase().as_str(), "y" | "yes" | "예" | "ㅇ")
+    matches!(
+        input.trim().to_lowercase().as_str(),
+        "y" | "yes" | "예" | "ㅇ"
+    )
 }
 
 fn run_install_command(command: &str) -> io::Result<()> {
@@ -155,9 +212,80 @@ fn run_install_command(command: &str) -> io::Result<()> {
     }
 }
 
-pub fn run_model(model: &str) -> io::Result<()> {
-    println!("llama-cli -m {model}");
-    let status = Command::new("llama-cli").arg("-hf").arg(model).status()?;
+pub fn run_client(model: &str, input: Option<ClientInput>, verbose: bool) -> io::Result<()> {
+    if verbose {
+        println!("llama-cli -hf {model}");
+    }
+    let mut command = Command::new("llama-cli");
+    command.arg("-hf").arg(model);
+
+    match input {
+        Some(ClientInput::Prompt(prompt)) => {
+            command.arg("-p").arg(prompt);
+        }
+        Some(ClientInput::File(file)) => {
+            command.arg("-p").arg(read_prompt_file(&file)?);
+        }
+        None => {}
+    }
+
+    let status = command.status()?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("Exit code: {status}"),
+        ))
+    }
+}
+
+pub fn run_completion(model: &str, input: Option<ClientInput>, verbose: bool) -> io::Result<()> {
+    if verbose {
+        println!("llama-completion -hf {model} --single-turn --simple-io --log-disable");
+    }
+    let mut command = Command::new("llama-completion");
+    command.arg("-hf").arg(model);
+    command.arg("--no-conversation");
+    command.arg("--single-turn");
+    command.arg("--simple-io");
+    command.arg("--log-disable");
+
+    match input {
+        Some(ClientInput::Prompt(prompt)) => {
+            command.arg("--prompt").arg(prompt);
+        }
+        Some(ClientInput::File(file)) => {
+            command.arg("--prompt").arg(read_prompt_file(&file)?);
+        }
+        None => {}
+    }
+
+    let status = command.status()?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("Exit code: {status}"),
+        ))
+    }
+}
+
+fn read_prompt_file(path: &str) -> io::Result<String> {
+    fs::read_to_string(path)
+}
+
+pub fn run_server(model: &str, verbose: bool) -> io::Result<()> {
+    if verbose {
+        println!("llama-server -hf {model}");
+    }
+    let status = Command::new("llama-server")
+        .arg("-hf")
+        .arg(model)
+        .status()?;
 
     if status.success() {
         Ok(())

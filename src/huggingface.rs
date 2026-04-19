@@ -173,7 +173,8 @@ mod tests {
 
     #[test]
     fn parses_next_link_header() {
-        let headers = "HTTP/2 200\nLink: <https://huggingface.co/api/models?cursor=abc>; rel=\"next\"\n";
+        let headers =
+            "HTTP/2 200\nLink: <https://huggingface.co/api/models?cursor=abc>; rel=\"next\"\n";
 
         assert_eq!(
             parse_next_link(headers).as_deref(),

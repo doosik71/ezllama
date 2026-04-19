@@ -1,15 +1,14 @@
-use std::io::{self, Write};
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use crossterm::{
-    cursor,
-    event::{self, Event, KeyCode},
-    execute, queue,
+    cursor, queue,
     style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
-    terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{self, Clear, ClearType},
 };
+
+use crate::list_picker;
 
 pub fn select_model(models: &[String]) -> io::Result<Option<String>> {
     if models.is_empty() {
@@ -18,78 +17,11 @@ pub fn select_model(models: &[String]) -> io::Result<Option<String>> {
     }
 
     let installed = installed_flags(models);
-    let mut stdout = io::stdout();
-    terminal::enable_raw_mode()?;
-    execute!(stdout, EnterAlternateScreen, cursor::Hide)?;
+    let selected = list_picker::select_index(models.len(), |stdout, selected, offset| {
+        draw(stdout, models, &installed, selected, offset)
+    })?;
 
-    let result = run_picker(&mut stdout, models, &installed);
-
-    execute!(stdout, LeaveAlternateScreen, cursor::Show)?;
-    terminal::disable_raw_mode()?;
-
-    result
-}
-
-fn run_picker(
-    stdout: &mut io::Stdout,
-    models: &[String],
-    installed: &[bool],
-) -> io::Result<Option<String>> {
-    let mut selected = 0usize;
-    let mut offset = 0usize;
-
-    loop {
-        draw(stdout, models, installed, selected, offset)?;
-
-        if !event::poll(Duration::from_millis(200))? {
-            continue;
-        }
-
-        let Event::Key(key_event) = event::read()? else {
-            continue;
-        };
-
-        match key_event.code {
-            KeyCode::Up => {
-                selected = selected.saturating_sub(1);
-                if selected < offset {
-                    offset = selected;
-                }
-            }
-            KeyCode::Down => {
-                if selected + 1 < models.len() {
-                    selected += 1;
-                }
-                let visible_rows = visible_rows()?;
-                if selected >= offset + visible_rows {
-                    offset = selected + 1 - visible_rows;
-                }
-            }
-            KeyCode::PageUp => {
-                let visible_rows = visible_rows()?;
-                selected = selected.saturating_sub(visible_rows);
-                offset = offset.saturating_sub(visible_rows);
-                if selected < offset {
-                    offset = selected;
-                }
-            }
-            KeyCode::PageDown => {
-                let visible_rows = visible_rows()?;
-                selected = (selected + visible_rows).min(models.len() - 1);
-                if selected >= offset + visible_rows {
-                    offset = selected + 1 - visible_rows;
-                }
-            }
-            KeyCode::Enter => {
-                let chosen = models[selected].clone();
-                return Ok(Some(chosen));
-            }
-            KeyCode::Esc => {
-                return Ok(None);
-            }
-            _ => {}
-        }
-    }
+    Ok(selected.map(|index| models[index].clone()))
 }
 
 fn draw(
@@ -110,7 +42,11 @@ fn draw(
     for (index, model) in models[offset..end].iter().enumerate() {
         let absolute_index = offset + index;
         let y = (index + 1) as u16;
-        let prefix = if absolute_index == selected { "> " } else { "  " };
+        let prefix = if absolute_index == selected {
+            "> "
+        } else {
+            "  "
+        };
         let suffix = if installed.get(absolute_index).copied().unwrap_or(false) {
             " (installed)"
         } else {
@@ -118,11 +54,7 @@ fn draw(
         };
         let line = format_model_line(prefix, model, suffix, max_width);
 
-        queue!(
-            stdout,
-            cursor::MoveTo(0, y),
-            Clear(ClearType::CurrentLine)
-        )?;
+        queue!(stdout, cursor::MoveTo(0, y), Clear(ClearType::CurrentLine))?;
 
         if absolute_index == selected {
             let foreground = if installed.get(absolute_index).copied().unwrap_or(false) {
@@ -161,11 +93,6 @@ fn draw(
 
     stdout.flush()?;
     Ok(())
-}
-
-fn visible_rows() -> io::Result<usize> {
-    let (_, rows) = terminal::size()?;
-    Ok(rows.saturating_sub(2).max(1) as usize)
 }
 
 fn truncate_to_width(text: &str, max_width: usize) -> String {
@@ -208,7 +135,10 @@ fn format_model_line(prefix: &str, model: &str, suffix: &str, max_width: usize) 
 }
 
 fn installed_flags(models: &[String]) -> Vec<bool> {
-    models.iter().map(|model| model_is_installed(model)).collect()
+    models
+        .iter()
+        .map(|model| model_is_installed(model))
+        .collect()
 }
 
 fn model_is_installed(model: &str) -> bool {
@@ -241,7 +171,12 @@ fn cache_roots() -> Vec<PathBuf> {
     }
 
     if let Some(home) = std::env::var_os("HOME") {
-        roots.push(PathBuf::from(home).join(".cache").join("huggingface").join("hub"));
+        roots.push(
+            PathBuf::from(home)
+                .join(".cache")
+                .join("huggingface")
+                .join("hub"),
+        );
     }
 
     roots

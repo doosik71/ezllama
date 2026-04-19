@@ -1,32 +1,71 @@
 use std::io::{self, Write};
 use std::process::{Command, Stdio};
 
-pub fn check() {
-    match cuda_toolkit_version() {
-        Some(version) => {
+pub struct CheckOptions {
+    pub verbose: bool,
+    pub interactive: bool,
+}
+
+pub fn check(options: CheckOptions) -> io::Result<()> {
+    if let Some(version) = cuda_toolkit_version() {
+        if options.verbose {
             println!("CUDA Toolkit is installed.");
             println!("Version: {version}");
         }
-        None => {
-            println!("CUDA Toolkit is not installed.");
+        return Ok(());
+    }
 
-            let install_plan = install_plan();
-            println!("Installation command:");
-            println!("{}", install_plan.message);
+    if options.verbose {
+        println!("CUDA Toolkit is not installed.");
+    }
 
-            if let Some(command) = install_plan.command {
-                if ask_yes_no("Install CUDA Toolkit? [y/N]: ") {
-                    match run_install_command(command) {
-                        Ok(()) => println!("Installation command executed."),
-                        Err(error) => eprintln!("Installation command failed: {error}"),
-                    }
-                } else {
-                    println!("Skipping installation.");
-                }
-            } else {
-                println!("No automatic install command could be determined. Please check the installation command for your distribution.");
-            }
+    let install_plan = install_plan();
+    if options.verbose {
+        println!("Installation command:");
+        println!("{}", install_plan.message);
+    }
+
+    let Some(command) = install_plan.command else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "No automatic install command could be determined. Please check the CUDA Toolkit install command for your distribution.",
+        ));
+    };
+
+    if !options.interactive {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "CUDA Toolkit is not installed.",
+        ));
+    }
+
+    if !ask_yes_no("Install CUDA Toolkit? [y/N]: ") {
+        if options.verbose {
+            println!("Skipping installation.");
         }
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "CUDA Toolkit is not installed.",
+        ));
+    }
+
+    run_install_command(command)?;
+    if options.verbose {
+        println!("Installation command executed.");
+    }
+
+    match cuda_toolkit_version() {
+        Some(version) => {
+            if options.verbose {
+                println!("CUDA Toolkit installation verified.");
+                println!("Version: {version}");
+            }
+            Ok(())
+        }
+        None => Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "CUDA Toolkit installation completed, but nvcc is still not available.",
+        )),
     }
 }
 
@@ -110,7 +149,10 @@ fn ask_yes_no(prompt: &str) -> bool {
         return false;
     }
 
-    matches!(input.trim().to_lowercase().as_str(), "y" | "yes" | "예" | "ㅇ")
+    matches!(
+        input.trim().to_lowercase().as_str(),
+        "y" | "yes" | "예" | "ㅇ"
+    )
 }
 
 fn run_install_command(command: &str) -> io::Result<()> {
