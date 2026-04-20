@@ -2,3 +2,4 @@
 .claude
 /target
 /llama.cpp/
+git_commit_message.txt

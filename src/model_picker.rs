@@ -2,13 +2,9 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crossterm::{
-    cursor, queue,
-    style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
-    terminal::{self, Clear, ClearType},
-};
+use crossterm::style::Color;
 
-use crate::list_picker;
+use crate::list_picker::{self, PickerItem};
 
 pub fn select_model(models: &[String]) -> io::Result<Option<String>> {
     if models.is_empty() {
@@ -17,11 +13,26 @@ pub fn select_model(models: &[String]) -> io::Result<Option<String>> {
     }
 
     let models = ordered_models(models);
-    let selected = list_picker::select_index(models.len(), |stdout, selected, offset| {
-        draw(stdout, &models, selected, offset)
-    })?;
+    let items: Vec<PickerItem> = models
+        .iter()
+        .map(|model| PickerItem {
+            display: if model.installed {
+                format!("{} (installed)", model.model)
+            } else {
+                model.model.clone()
+            },
+            value: model.model.clone(),
+            color: if model.installed {
+                Some(Color::Green)
+            } else {
+                None
+            },
+        })
+        .collect();
 
-    Ok(selected.map(|index| models[index].model.clone()))
+    let selected = list_picker::select_value(&items, "Select model:")?;
+
+    Ok(selected)
 }
 
 pub fn print_model_list(models: &[String]) -> io::Result<()> {
@@ -36,119 +47,6 @@ pub fn print_model_list(models: &[String]) -> io::Result<()> {
     }
 
     Ok(())
-}
-
-fn draw(
-    stdout: &mut io::Stdout,
-    models: &[ModelEntry],
-    selected: usize,
-    offset: usize,
-) -> io::Result<()> {
-    let (_, rows) = terminal::size()?;
-    let visible_rows = rows.saturating_sub(2).max(1) as usize;
-    let end = (offset + visible_rows).min(models.len());
-    let max_width = terminal::size()?.0 as usize;
-
-    queue!(stdout, cursor::MoveTo(0, 0), Clear(ClearType::CurrentLine))?;
-    writeln!(stdout, "Select model: ")?;
-
-    for (index, model) in models[offset..end].iter().enumerate() {
-        let absolute_index = offset + index;
-        let y = (index + 1) as u16;
-        let prefix = if absolute_index == selected {
-            "> "
-        } else {
-            "  "
-        };
-        let suffix = if model.installed {
-            " (installed)"
-        } else {
-            ""
-        };
-        let line = format_model_line(prefix, &model.model, suffix, max_width);
-
-        queue!(stdout, cursor::MoveTo(0, y), Clear(ClearType::CurrentLine))?;
-
-        if absolute_index == selected {
-            let foreground = if model.installed {
-                Color::Green
-            } else {
-                Color::Reset
-            };
-            queue!(
-                stdout,
-                SetAttribute(Attribute::Reverse),
-                SetForegroundColor(foreground),
-                Print(line),
-                SetAttribute(Attribute::Reset),
-                ResetColor
-            )?;
-        } else if model.installed {
-            queue!(
-                stdout,
-                SetForegroundColor(Color::Green),
-                Print(line),
-                ResetColor
-            )?;
-        } else {
-            queue!(stdout, Print(line))?;
-        }
-    }
-
-    for y in (end - offset + 1)..=visible_rows {
-        queue!(stdout, cursor::MoveTo(0, y as u16), Clear(ClearType::CurrentLine))?;
-    }
-
-    if rows > 1 {
-        queue!(
-            stdout,
-            cursor::MoveTo(0, rows - 1),
-            Clear(ClearType::CurrentLine)
-        )?;
-        write!(stdout, "↑/↓ to move, Enter to select, Esc to exit")?;
-    }
-
-    stdout.flush()?;
-    Ok(())
-}
-
-fn truncate_to_width(text: &str, max_width: usize) -> String {
-    if max_width == 0 {
-        return String::new();
-    }
-
-    let char_count = text.chars().count();
-    if char_count <= max_width {
-        return text.to_string();
-    }
-
-    if max_width == 1 {
-        return "…".to_string();
-    }
-
-    let mut result = String::new();
-    for ch in text.chars().take(max_width.saturating_sub(1)) {
-        result.push(ch);
-    }
-    result.push('…');
-    result
-}
-
-fn format_model_line(prefix: &str, model: &str, suffix: &str, max_width: usize) -> String {
-    let prefix_width = prefix.chars().count();
-    let suffix_width = suffix.chars().count();
-
-    if max_width <= prefix_width + suffix_width {
-        return truncate_to_width(prefix, max_width);
-    }
-
-    let available = max_width - prefix_width - suffix_width;
-    let model_part = truncate_to_width(model, available);
-    let mut line = String::with_capacity(prefix.len() + model_part.len() + suffix.len());
-    line.push_str(prefix);
-    line.push_str(&model_part);
-    line.push_str(suffix);
-    line
 }
 
 fn ordered_models(models: &[String]) -> Vec<ModelEntry> {

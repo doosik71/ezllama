@@ -1,11 +1,5 @@
 use std::env;
-use std::io::{self, Write};
-
-use crossterm::{
-    cursor, queue,
-    style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
-    terminal::{self, Clear, ClearType},
-};
+use std::io;
 
 mod cuda_toolkit;
 mod huggingface;
@@ -203,107 +197,30 @@ fn print_help() {
 
 fn select_run_mode() -> io::Result<RunMode> {
     let options = [
-        ("Client (llama-cli)", RunMode::Client),
-        ("Server (llama-server)", RunMode::Server),
+        list_picker::PickerItem {
+            display: "Client (llama-cli)".to_string(),
+            value: "client".to_string(),
+            color: None,
+        },
+        list_picker::PickerItem {
+            display: "Server (llama-server)".to_string(),
+            value: "server".to_string(),
+            color: None,
+        },
     ];
 
-    let selected = list_picker::select_index(options.len(), |stdout, selected, offset| {
-        draw_run_mode(stdout, &options, selected, offset)
-    })?;
+    let selected = list_picker::select_value(&options, "Select execution mode:")?;
 
-    selected.map(|index| options[index].1).ok_or_else(|| {
-        io::Error::new(
+    match selected.as_deref() {
+        Some("client") => Ok(RunMode::Client),
+        Some("server") => Ok(RunMode::Server),
+        Some(other) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Invalid run mode value: {other}"),
+        )),
+        None => Err(io::Error::new(
             io::ErrorKind::Interrupted,
             "Run mode selection was canceled.",
-        )
-    })
-}
-
-fn draw_run_mode(
-    stdout: &mut io::Stdout,
-    options: &[(&str, RunMode)],
-    selected: usize,
-    offset: usize,
-) -> io::Result<()> {
-    let (_, rows) = terminal::size()?;
-    let visible_rows = rows.saturating_sub(2).max(1) as usize;
-    let end = (offset + visible_rows).min(options.len());
-    let max_width = terminal::size()?.0 as usize;
-
-    queue!(stdout, cursor::MoveTo(0, 0), Clear(ClearType::All))?;
-    writeln!(stdout, "Select execution mode:")?;
-
-    for (index, (label, _mode)) in options[offset..end].iter().enumerate() {
-        let absolute_index = offset + index;
-        let y = (index + 1) as u16;
-        let prefix = if absolute_index == selected {
-            "> "
-        } else {
-            "  "
-        };
-        let line = format_line(prefix, label, max_width);
-
-        queue!(stdout, cursor::MoveTo(0, y), Clear(ClearType::CurrentLine))?;
-
-        if absolute_index == selected {
-            queue!(
-                stdout,
-                SetAttribute(Attribute::Reverse),
-                SetForegroundColor(Color::Reset),
-                Print(line),
-                SetAttribute(Attribute::Reset),
-                ResetColor
-            )?;
-        } else {
-            queue!(stdout, Print(line))?;
-        }
+        )),
     }
-
-    if rows > 1 {
-        queue!(
-            stdout,
-            cursor::MoveTo(0, rows - 1),
-            Clear(ClearType::CurrentLine)
-        )?;
-        write!(stdout, "↑/↓ to move, Enter to select, Esc to exit")?;
-    }
-
-    stdout.flush()?;
-    Ok(())
-}
-
-fn format_line(prefix: &str, text: &str, max_width: usize) -> String {
-    let prefix_width = prefix.chars().count();
-    if max_width <= prefix_width {
-        return truncate_to_width(prefix, max_width);
-    }
-
-    let available = max_width - prefix_width;
-    let text_part = truncate_to_width(text, available);
-    let mut line = String::with_capacity(prefix.len() + text_part.len());
-    line.push_str(prefix);
-    line.push_str(&text_part);
-    line
-}
-
-fn truncate_to_width(text: &str, max_width: usize) -> String {
-    if max_width == 0 {
-        return String::new();
-    }
-
-    let char_count = text.chars().count();
-    if char_count <= max_width {
-        return text.to_string();
-    }
-
-    if max_width == 1 {
-        return "…".to_string();
-    }
-
-    let mut result = String::new();
-    for ch in text.chars().take(max_width.saturating_sub(1)) {
-        result.push(ch);
-    }
-    result.push('…');
-    result
 }
