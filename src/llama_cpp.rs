@@ -169,12 +169,12 @@ fn install_plan() -> InstallPlan {
             else \
                 git clone https://github.com/ggerganov/llama.cpp.git && cd llama.cpp; \
             fi && \
-            cmake -B build -DLLAMA_SERVER=ON && \
+            cmake -B build -DLLAMA_SERVER=ON -DGGML_CUDA=ON && \
             cmake --build build -j && \
             mkdir -p ~/.local/bin && \
-            ln -sf \"$(pwd)/build/bin/llama-cli\" ~/.local/bin/llama-cli && \
-            ln -sf \"$(pwd)/build/bin/llama-server\" ~/.local/bin/llama-server && \
-            ln -sf \"$(pwd)/build/bin/llama-completion\" ~/.local/bin/llama-completion";
+            cp -f \"$(pwd)/build/bin/llama-cli\" ~/.local/bin/llama-cli && \
+            cp -f \"$(pwd)/build/bin/llama-server\" ~/.local/bin/llama-server && \
+            cp -f \"$(pwd)/build/bin/llama-completion\" ~/.local/bin/llama-completion";
 
     InstallPlan {
         message: cmd,
@@ -280,7 +280,7 @@ fn read_prompt_file(path: &str) -> io::Result<String> {
 
 pub fn run_server(model: &str, verbose: bool) -> io::Result<()> {
     if verbose {
-        println!("llama-server -hf {model}");
+        println!("llama-server --webui-mcp-proxy -hf {model}");
     }
     let status = Command::new("llama-server")
         .arg("-hf")
